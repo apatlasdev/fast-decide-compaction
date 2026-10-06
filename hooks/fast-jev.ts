@@ -335,8 +335,16 @@ export const register: Register = (on: On, options: PluginOptions) => {
   const configured = resolveHookConfig(options);
   let compacting = false;
   let skipNoticeShown = false;
+  // Headless/SDK hosts cannot start a compaction from a hook, but they accept a queued
+  // `/compact` prompt. Ask at most once per 10 minutes, and stop asking if a request
+  // never produced a session.compact event (the host did not treat it as a command).
+  let slashCompactAt = 0;
+  let slashCompactSeenAt = 0;
+  let slashCompactDisabled = false;
+  const SLASH_COMPACT_COOLDOWN_MS = 10 * 60 * 1000;
 
   on('session.compact', async ($, event, next) => {
+    slashCompactSeenAt = Date.now();
     try {
       let envModel: string | undefined;
       try { envModel = (await $.env.get('FAST_DECIDE_MODEL')) || (await $.env.get('FAST_JEV_MODEL')) || undefined; } catch { /* env unavailable */ }
@@ -399,9 +407,22 @@ export const register: Register = (on: On, options: PluginOptions) => {
       compacting = true;
       await $.session.compact();
     } catch (error) {
-      // Headless/SDK sessions cannot start a compaction from a hook; the host's own
-      // compaction still goes through the session.compact hook. Say so once, briefly.
-      if (!skipNoticeShown) {
+      const reason = error instanceof Error ? error.message : String(error);
+      if (/headless|not available/i.test(reason) && !slashCompactDisabled) {
+        const now = Date.now();
+        if (slashCompactAt > 0 && slashCompactSeenAt < slashCompactAt && now - slashCompactAt > 120_000) {
+          slashCompactDisabled = true; // the last request never compacted anything
+        } else if (now - slashCompactAt > SLASH_COMPACT_COOLDOWN_MS) {
+          try {
+            slashCompactAt = now;
+            await $.prompt.submit({ text: '/compact' });
+            $.ui.log('fast-decide-compaction: context is past the threshold, asking the host to /compact');
+          } catch {
+            slashCompactDisabled = true;
+          }
+        }
+      } else if (!skipNoticeShown) {
+        // The host's own compaction still goes through the session.compact hook. Say so once, briefly.
         skipNoticeShown = true;
         $.ui.log('fast-decide-compaction: host compacts this session (hook auto-trigger unavailable here)');
       }
