@@ -1,4 +1,5 @@
 import { noulAnswer } from './request.js';
+import { compactChunked } from './chunk.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
   CallAnswer,
@@ -25,6 +26,19 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
 
 /** Tokens the request envelope (`model`, key names) adds around state and questions. */
 const REQUEST_OVERHEAD_TOKENS = 20;
+
+/**
+ * Mercury Decide (and Jev) evaluate every question against the full state, so a request costs
+ * about `questions x (state + question)` input tokens, not `state + questions`. Measured
+ * 2026-10-02: 60 questions over a ~14.5k-token state (869k tokens) answered; 70 questions
+ * (~1.0M) were refused with HTTP 422 "Decision service could not complete the request", which
+ * made every long-session compaction fall back to the built-in summary. Each request is
+ * therefore capped at this estimated evaluation cost (the estimate runs 2-50% above the
+ * tokens Mercury reports, so this stays well under the ~1M ceiling).
+ */
+const MAX_EVAL_TOKENS_PER_REQUEST = 600_000;
+/** Requests in flight at once; one failing request still fails the compaction (caller falls back). */
+const MAX_CONCURRENT_REQUESTS = 4;
 
 function finite(value: number | undefined, fallback: number): number {
   return typeof value === 'number' && Number.isFinite(value) ? value : fallback;
@@ -79,12 +93,19 @@ export function batchCalls(
   const batches: ToolCall[][] = [];
   let current: ToolCall[] = [];
   let currentTokens = 0;
+  let currentEval = 0;
   for (const call of calls) {
     const tokens = estimateTokens(JSON.stringify(questionsFor(call)));
-    if (current.length > 0 && currentTokens + tokens > budget) {
+    // Two questions per call, each evaluated against the whole state.
+    const evalCost = 2 * (stateTokens + REQUEST_OVERHEAD_TOKENS) + tokens;
+    if (
+      current.length > 0 &&
+      (currentTokens + tokens > budget || currentEval + evalCost > MAX_EVAL_TOKENS_PER_REQUEST)
+    ) {
       batches.push(current);
       current = [];
       currentTokens = 0;
+      currentEval = 0;
     }
     if (current.length === 0 && tokens > budget) {
       throw new Error(
@@ -93,6 +114,7 @@ export function batchCalls(
     }
     current.push(call);
     currentTokens += tokens;
+    currentEval += evalCost;
   }
   if (current.length > 0) batches.push(current);
   return batches;
@@ -112,6 +134,30 @@ export function decideCall(
     return { ...base, action: 'drop_result', reason: 'result_dropped' };
   }
   return { ...base, action: 'drop_call', reason: 'call_dropped' };
+}
+
+/** Runs `fn` over `items` with at most `limit` in flight; stops starting new work after a failure. */
+async function mapLimit<T, R>(
+  items: readonly T[],
+  limit: number,
+  fn: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results: R[] = new Array(items.length);
+  let next = 0;
+  let failed = false;
+  const worker = async (): Promise<void> => {
+    while (!failed && next < items.length) {
+      const index = next++;
+      try {
+        results[index] = await fn(items[index] as T);
+      } catch (error) {
+        failed = true;
+        throw error;
+      }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
 }
 
 async function askBatch(
@@ -268,14 +314,38 @@ export async function compact(
   let fitted: { tokens: number; stage: string } = { tokens: 0, stage: '' };
   let batches: ToolCall[][] = [];
   const answers = new Map<string, CallAnswer>();
+  let requestCount = 0;
   if (candidates.length > 0) {
-    const state = fitState(messages, calls, resolved);
-    fitted = state;
-    batches = batchCalls(candidates, state.tokens, resolved);
-    const answered = await Promise.all(
-      batches.map((batch) => askBatch(asker, state.state, batch)),
-    );
-    for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    let state: ReturnType<typeof fitState> | null = null;
+    try {
+      state = fitState(messages, calls, resolved);
+    } catch (error) {
+      // Only an oversized history is handled by chunking; anything else is a real failure.
+      if (!/history too large/.test(error instanceof Error ? error.message : String(error))) {
+        throw error;
+      }
+    }
+    if (state) {
+      fitted = state;
+      batches = batchCalls(candidates, state.tokens, resolved);
+      requestCount = batches.length;
+      const answered = await mapLimit(batches, MAX_CONCURRENT_REQUESTS, (batch) =>
+        askBatch(asker, state.state, batch),
+      );
+      for (const map of answered) for (const [id, answer] of map) answers.set(id, answer);
+    } else {
+      const chunked = await compactChunked(messages, calls, resolved, asker, {
+        fitState,
+        batchCalls,
+        askBatch,
+        mapLimit,
+        maxConcurrent: MAX_CONCURRENT_REQUESTS,
+        estimateTokens,
+      });
+      fitted = { tokens: chunked.stateTokens, stage: chunked.stateStage };
+      requestCount = chunked.requests;
+      for (const [id, answer] of chunked.answers) answers.set(id, answer);
+    }
   }
 
   const decisions = calls.map((call) =>
@@ -302,7 +372,7 @@ export async function compact(
       pinned: count(decisions, 'pinned'),
       stateTokens: fitted.tokens,
       stateStage: fitted.stage,
-      requests: batches.length,
+      requests: requestCount,
       ms: Date.now() - started,
     },
   };

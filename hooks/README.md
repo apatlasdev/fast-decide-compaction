@@ -55,7 +55,7 @@ The plugin declares these `userConfig` values in
 | `maxStateTokens` | `25000` |
 | `maxRequestTokens` | `30000` |
 | `truncateHeadChars` | `300` |
-| `model` | `jev-latest` |
+| `model` | `inception/mercury-decide:free` (OpenRouter; env FAST_JEV_MODEL overrides; TypeSafe-native default is `jev-latest`) |
 
 The TypeSafe key can be supplied as the sensitive `apiKey` plugin option or
 through `TYPESAFE_API_KEY`. The environment variable is the recommended

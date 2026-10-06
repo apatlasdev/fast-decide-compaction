@@ -2,3 +2,6 @@ node_modules
 dist
 .env
 demo/JevDemo/build
+*.bak*
+*.orig
+package.json.bak*
