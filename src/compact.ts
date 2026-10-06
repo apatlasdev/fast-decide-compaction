@@ -160,13 +160,27 @@ async function mapLimit<T, R>(
   return results;
 }
 
+/** The free tier answers 429 when requests bunch up; wait and retry a few times before giving up. */
+async function askWithRetry(asker: JevAsker, state: CompactionState, questions: JevQuestions) {
+  const waits = [1500, 4000, 9000, 20000];
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await asker.ask(state, questions);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      if (!/429|rate.?limit/i.test(message) || attempt >= waits.length) throw error;
+      await new Promise((resolve) => setTimeout(resolve, waits[attempt]));
+    }
+  }
+}
+
 async function askBatch(
   asker: JevAsker,
   state: CompactionState,
   batch: readonly ToolCall[],
 ): Promise<Map<string, CallAnswer>> {
   const questions: JevQuestions = Object.assign({}, ...batch.map(questionsFor));
-  const { answers } = await asker.ask(state, questions);
+  const { answers } = await askWithRetry(asker, state, questions);
   return new Map(
     batch.map((call) => [
       call.id,
@@ -325,6 +339,9 @@ export async function compact(
         throw error;
       }
     }
+    // A single state squeezed into the cap (old calls merged or left out) hides what the
+    // calls were for, and Decide then drops nearly everything. Windows at full detail decide better.
+    if (state && state.stage !== 'full') state = null;
     if (state) {
       fitted = state;
       batches = batchCalls(candidates, state.tokens, resolved);

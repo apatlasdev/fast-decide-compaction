@@ -270,6 +270,26 @@ async function getApiKey(
 // 2026-09-23: Claude Code 2.1.281 refuses `$.session?.usage?.()` ($ nouns must be spelled
 // `$.noun.event(...)` at the call site), and a hooks module has no Node, so the old
 // `import('node:fs/promises')` append could never run. Both now go through `$`.
+// Short diagnostic trail (last ~200 lines) so a silent trigger can be debugged from a file.
+async function trace($: any, text: string): Promise<void> {
+  try {
+    const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'));
+    if (!home) return;
+    const file = `${home}/.claude/fast-decide-trace.log`;
+    let prior = '';
+    try {
+      prior = await $.fs.read(file);
+    } catch {
+      /* first line */
+    }
+    const NL = String.fromCharCode(10);
+    const lines = (prior + `${new Date().toISOString()} ${text}` + NL).split(NL);
+    await $.fs.write(file, lines.slice(-201).join(NL));
+  } catch {
+    /* tracing must never break compaction */
+  }
+}
+
 async function recordSavings(
   $: any,
   entry: Record<string, unknown>,
@@ -345,6 +365,7 @@ export const register: Register = (on: On, options: PluginOptions) => {
 
   on('session.compact', async ($, event, next) => {
     slashCompactSeenAt = Date.now();
+    void trace($, `session.compact fired trigger=${(event as any)?.trigger ?? '?'} messages=${(event as any)?.messages?.length ?? '?'}`);
     try {
       let envModel: string | undefined;
       try { envModel = (await $.env.get('FAST_DECIDE_MODEL')) || (await $.env.get('FAST_JEV_MODEL')) || undefined; } catch { /* env unavailable */ }
@@ -354,7 +375,11 @@ export const register: Register = (on: On, options: PluginOptions) => {
         const response = await withTimeout($, $.http.fetch(url, init), JEV_CALL_TIMEOUT_MS, 'Jev request');
         return { status: response.status, ok: response.ok, text: response.text };
       }), JEV_COMPACT_BUDGET_MS, 'Jev compaction');
-      for (const line of decisionLogLines(result)) $.ui.log(line);
+      // The per-call table is thousands of characters on big sessions; the summary line below
+      // already says what happened. Set FAST_DECIDE_VERBOSE=1 to print every decision.
+      let verbose = false;
+      try { verbose = ['1', 'true'].includes(((await $.env.get('FAST_DECIDE_VERBOSE')) ?? '').toLowerCase()); } catch { /* env unavailable */ }
+      if (verbose) for (const line of decisionLogLines(result)) $.ui.log(line);
       if (reductionRatio(result) < config.minReductionRatio) {
         await recordSavings($, {
           outcome: 'fallback_below_minimum',
@@ -404,22 +429,40 @@ export const register: Register = (on: On, options: PluginOptions) => {
     try {
       const { context } = await $.session.usage();
       if ((context.percent ?? 0) < configured.compactAtPercent) return next(event);
+      void trace($, `turn.complete percent=${context.percent} threshold=${configured.compactAtPercent}`);
       compacting = true;
       await $.session.compact();
     } catch (error) {
       const reason = error instanceof Error ? error.message : String(error);
+      void trace($, `session.compact() refused: ${reason.slice(0, 160)} (disabled=${slashCompactDisabled})`);
       if (/headless|not available/i.test(reason) && !slashCompactDisabled) {
         const now = Date.now();
         if (slashCompactAt > 0 && slashCompactSeenAt < slashCompactAt && now - slashCompactAt > 120_000) {
           slashCompactDisabled = true; // the last request never compacted anything
         } else if (now - slashCompactAt > SLASH_COMPACT_COOLDOWN_MS) {
-          try {
-            slashCompactAt = now;
-            await $.prompt.submit({ text: '/compact' });
-            $.ui.log('fast-decide-compaction: context is past the threshold, asking the host to /compact');
-          } catch {
-            slashCompactDisabled = true;
-          }
+          slashCompactAt = now;
+          // Ask after this turn has finished: inside the hook the turn is still waiting on us,
+          // and the host refuses to start a command or prompt from there.
+          $.clock.after(1500, async () => {
+            let how = '';
+            try {
+              await $.command.run({ command: 'compact' });
+              how = 'command.run';
+            } catch (runError) {
+              void trace($, `command.run(compact) failed: ${runError instanceof Error ? runError.message.slice(0, 160) : String(runError)}`);
+              try {
+                await $.prompt.submit({ text: '/compact' });
+                how = 'prompt.submit';
+              } catch (submitError) {
+                slashCompactDisabled = true;
+                void trace($, `prompt.submit failed: ${submitError instanceof Error ? submitError.message.slice(0, 160) : String(submitError)}`);
+              }
+            }
+            if (how) {
+              void trace($, `queued /compact via ${how}`);
+              $.ui.log('fast-decide-compaction: context is past the threshold, asking the host to /compact');
+            }
+          });
         }
       } else if (!skipNoticeShown) {
         // The host's own compaction still goes through the session.compact hook. Say so once, briefly.

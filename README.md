@@ -115,6 +115,16 @@ put it in a source file.
 per-reason decision counts, the state size in estimated tokens, which fitting
 stage was needed, and the number of requests.
 
+## Status of this fork
+
+Experimental. What was measured, so you can judge it:
+
+- Real use: on one long coding-agent session (nine compactions, 78k-310k tokens kept) the session carried on without visible loss of context, with 5-15x more of the conversation kept word for word than the built-in summary.
+- A replay test on real session slices (checking whether file paths and ids used later survive) did not beat naive baselines such as keeping the newest messages. On long histories Decide drops most tool calls and results, so detail that lived only in old tool output is gone.
+- Large histories are decided in windows of about 18k tokens; free-tier rate limits are retried with backoff.
+- In headless/SDK hosts (e.g. the Claude desktop app) the hook cannot start a compaction itself, so it queues `/compact` once context passes the threshold. Each step is written to `~/.claude/fast-decide-trace.log`.
+- The per-call decision table is no longer printed by default; set `FAST_DECIDE_VERBOSE=1` to see it.
+
 ## Limitations
 
 - Only tool calls and results are candidates; text messages are never removed
