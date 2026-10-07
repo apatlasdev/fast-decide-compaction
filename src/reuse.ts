@@ -17,6 +17,21 @@ export function identifierTokens(text: string): Set<string> {
   return out;
 }
 
+/** later[i] = identifiers written in the conversation text and tool inputs of messages after i. */
+export function laterIdentifierSets(messages: readonly Message[]): Set<string>[] {
+  const later: Set<string>[] = new Array(messages.length);
+  let running = new Set<string>();
+  for (let i = messages.length - 1; i >= 0; i--) {
+    later[i] = running;
+    const message = messages[i]!;
+    const inputs = message.toolUses.map((use) => JSON.stringify(use.input ?? {})).join(' ');
+    const next = new Set(running);
+    for (const token of identifierTokens(`${message.text ?? ''} ${inputs}`)) next.add(token);
+    running = next;
+  }
+  return later;
+}
+
 export interface ReuseOptions {
   /** Distinct identifiers of a result that must reappear in later conversation text. */
   minHits: number;

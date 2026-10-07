@@ -36,30 +36,31 @@ const { messages } = await compactWire('openai', myChatMessages, client, { prese
 
 `compactWire` takes `anthropic`, `openai` or `generic` messages, returns the same format, hands back untouched messages as your own objects, and keeps tool calls and their results paired. The core (`compact()`) works on a neutral shape, so a new harness needs only a converter.
 
-**Cost: what actually moves it.** Every turn re-reads the whole context, so the biggest lever is *how early you compact*, not how you compact. `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06, prompt caching on, 4k new and 600 output tokens per turn, 20k-token summary):
+**Keeps the work flowing.** Claude Code compacts on its own in the middle of a turn, between model requests, and the turn simply carries on; background commands keep running through it. To make that happen at 67% of *whatever the model's window is* (instead of ~97%), set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=67` in the `env` block of `~/.claude/settings.json`. This plugin's `session.compact` hook then does the Decide compaction in a few seconds, with no stop and no queued command. The queued `/compact` described above is only a fallback for hosts where that setting is unavailable; it ends the turn, so work does not resume by itself.
 
-| Model | Host default (summary at ~900k) | Summary at 200k | Economy mode at 200k | Economy vs host default | vs summary at 200k |
-|---|---|---|---|---|---|
-| Claude Sonnet 5.5 | $0.110/turn | $0.049 | $0.043 | -61% | -12% |
-| Claude Opus 5.5 | $0.127 | $0.072 | $0.061 | -52% | -15% |
-| GPT-6.1 Sol | $0.064 | $0.036 | $0.031 | -52% | -15% |
-| GPT-6 Astra | $0.550 | $0.243 | $0.213 | -61% | -12% |
+**Cost: what actually moves it.** Every turn re-reads the whole context, so cost follows how much you keep and how early you compact. `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06; prompt caching on; 4k new and 600 output tokens per turn; a 20k-token summary; trigger at 67% of a 1M window):
 
-Read it honestly: most of the saving comes from compacting early, which any tool can do. What this adds is that compaction at that point keeps more of what the work needs (see recall below) and skips the summary call (a 12-15% edge at equal size). Economy mode is a modelled estimate, not a measured bill. In **fidelity mode** (default) the history stays large, so it costs *more* per turn than a summary (+2% at ~90% smaller up to +44% at ~50% smaller); it pays off only if the summary would have made the agent re-read or redo work (about 32-64 extra turns per 145-turn cycle).
+| Model | Summary, $/turn | Economy mode (keeps ~40k tokens) | Fidelity mode (keeps ~50%) |
+|---|---|---|---|
+| Claude Sonnet 5.5 | $0.087 | +0.3% | +45% |
+| Claude Opus 5.5 | $0.105 | -0.6% | +45% |
+| GPT-6.1 Sol | $0.053 | -0.6% | +45% |
+| GPT-6 Astra | $0.437 | +0.3% | +45% |
 
-Set `mode` to `economy` in the plugin settings (or `compactAtPercent`, `preserveRecentTokens`, `targetTokens` yourself): it compacts at 20% of the window, keeps the newest ~20k tokens whole, and trims the rest to about 40k tokens, keeping first the results the conversation cites. The preset assumes a ~1M-token window (20% = 200k); on a 200k window set `compactAtPercent` to about 60 yourself, or it would compact almost immediately.
+At a 67% trigger this does **not** save money: economy mode costs about the same as a summary, fidelity mode costs 45% more because it keeps more. The money lever is compacting earlier (`node scripts/cost-model.mjs --sweep`: compacting at 200k instead of 900k is about 50-60% cheaper per turn on every model above), which any tool can do and which gives up context. What this tool adds is *what survives*, shown next. All of this is a model with assumed turn sizes, not a measured bill.
 
-**Recall at size** (replay of real sessions: share of the paths, ids and error names used later that survive; 3 slices of one agent, small sample):
+**Recall at size** (replay of real sessions: share of the paths, ids and error names used later that survive; 3 slices of one agent's sessions, small sample):
 
 | Setup | History left | Recall |
 |---|---|---|
-| LLM summary + last 40 messages | 3-5% | 23-44% |
-| Decide, recency tail 10% + target 15% | 19-56% | 57-81% |
+| LLM summary + last 40 messages | 3-5% (~10k tokens) | 23-44% |
+| Decide, newest 20k tokens whole + trimmed to ~40k | 13-52% | 50-85% |
+| Decide, tail 10% + target 15% | 19-56% | 57-81% |
 | Decide, tail 15% + target 25% | 25-58% | 71-88% |
 | Decide, tail 25% + target 40% | 38-64% | 80-88% |
 | Keep only the newest text, same sizes | same | 65-93% |
 
-The tail is the main source of recall. At equal size Decide + reuse is about level with keeping the newest text and clearly above a summary; it does not clearly beat the newest-text baseline. Slice B is mostly conversation text, which no trimming touches, so its history stays large.
+The tail does most of the work. At equal size, Decide plus the reuse check is about level with keeping the newest text and well above a summary, and it does not clearly beat the newest-text baseline. Two limits: a session whose history is mostly the model's own prose (one slice was ~50% prose) cannot be trimmed below that, because this tool only removes tool output and never rewrites text; and line extraction (`extractCited`, `extractOldText`, keeping only lines that contain cited identifiers) was tested and made no measurable difference, so it is off.
 
 ## What and why
 

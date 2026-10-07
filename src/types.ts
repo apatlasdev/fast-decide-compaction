@@ -103,6 +103,10 @@ export interface CompactOptions {
   reuseKeep?: boolean;
   /** Economy mode: after deciding, trim the lowest-value kept results until the history is about this many characters (0 = off). */
   targetChars?: number;
+  /** Keep only the lines of long kept tool results that contain identifiers the conversation cites later (verbatim lines, rest omitted). */
+  extractCited?: boolean;
+  /** Same line extraction for long assistant messages older than the protected tail. */
+  extractOldText?: boolean;
   /** Also keep every message in the newest N characters (like Unreal Agent's retained-token budget). 0 = off. */
   preserveRecentChars?: number;
   /** Distinct identifiers that must reappear for a result to count as reused. Default 2. */
@@ -123,6 +127,8 @@ export interface ResolvedCompactOptions {
   preserveRecentMessages: number;
   reuseKeep: boolean;
   targetChars: number;
+  extractCited: boolean;
+  extractOldText: boolean;
   preserveRecentChars: number;
   reuseMinHits: number;
   reuseBudgetChars: number;

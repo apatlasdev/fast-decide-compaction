@@ -20,7 +20,7 @@ import type {
 } from '../src/types.js';
 
 const HOOK_DEFAULTS = {
-  compactAtPercent: 60,
+  compactAtPercent: 67,
   minReductionRatio: 0.25,
   // OpenRouter default: Inception's Mercury Decide (free, 32k ctx, same Decisions API).
   // Override with the `model` plugin option or the FAST_JEV_MODEL env var.
@@ -49,6 +49,9 @@ export type HookConfig = CompactOptions & {
   compactAtPercent: number;
   minReductionRatio: number;
   model: string;
+  /** Percent of the model's context window to keep as a whole-message tail / to trim the history to. */
+  preserveRecentPercent?: number;
+  targetPercent?: number;
 };
 
 function optionNumber(options: PluginOptions, key: string, fallback: number): number {
@@ -69,16 +72,16 @@ const OPENROUTER_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 // `mode: economy` trades fidelity for a smaller, cheaper context: compact at 20% of the window,
 // keep the newest ~20k tokens whole, and trim to about 40k tokens. Explicit options still win.
 const ECONOMY_PRESET = {
-  compactAtPercent: 20,
+  compactAtPercent: 67,
   preserveRecentMessages: 10,
-  preserveRecentChars: 80_000,
-  targetChars: 160_000,
+  preserveRecentPercent: 2,
+  targetPercent: 4,
 } as const;
 
 export function resolveHookConfig(options: PluginOptions): HookConfig {
   const economy = optionString(options, 'mode') === 'economy';
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = economy
-    ? { preserveRecentMessages: ECONOMY_PRESET.preserveRecentMessages, preserveRecentChars: ECONOMY_PRESET.preserveRecentChars, targetChars: ECONOMY_PRESET.targetChars }
+    ? { preserveRecentMessages: ECONOMY_PRESET.preserveRecentMessages }
     : {};
   for (const key of [
     'keepThreshold',
@@ -110,6 +113,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     if (typeof value === 'number' && Number.isFinite(value)) config[charKey] = Math.round(value * 4);
   }
   if (options['reuseKeep'] === false) config.reuseKeep = false;
+  if (options['extractCited'] === true) config.extractCited = true;
+  if (options['extractOldText'] === true) config.extractOldText = true;
+  const preservePct = optionNumber(options, 'preserveRecentPercent', economy ? ECONOMY_PRESET.preserveRecentPercent : 0);
+  const targetPct = optionNumber(options, 'targetPercent', economy ? ECONOMY_PRESET.targetPercent : 0);
+  if (preservePct > 0) config.preserveRecentPercent = preservePct;
+  if (targetPct > 0) config.targetPercent = targetPct;
   const baseUrl = optionString(options, 'baseUrl') ?? OPENROUTER_DECISIONS_URL;
   if (baseUrl) config.baseUrl = baseUrl;
   const apiKey = optionString(options, 'apiKey');
@@ -392,7 +401,24 @@ export const register: Register = (on: On, options: PluginOptions) => {
       let envModel: string | undefined;
       try { envModel = (await $.env.get('FAST_DECIDE_MODEL')) || (await $.env.get('FAST_JEV_MODEL')) || undefined; } catch { /* env unavailable */ }
       const model = optionString(options, 'model') ?? envModel ?? configured.model;
-      const config = { ...configured, model, apiKey: await getApiKey($, configured) };
+      const config: HookConfig = { ...configured, model, apiKey: await getApiKey($, configured) };
+      // Percent-of-window options become characters once the window is known (4 chars per token).
+      if (config.preserveRecentPercent || config.targetPercent) {
+        try {
+          const usage = await $.session.usage();
+          const tokens = usage?.context?.tokens;
+          const percent = usage?.context?.percent;
+          if (tokens && percent && percent > 0) {
+            const windowTokens = (tokens * 100) / percent;
+            if (config.preserveRecentPercent && config.preserveRecentChars === undefined) {
+              config.preserveRecentChars = Math.round((config.preserveRecentPercent / 100) * windowTokens * 4);
+            }
+            if (config.targetPercent && config.targetChars === undefined) {
+              config.targetChars = Math.round((config.targetPercent / 100) * windowTokens * 4);
+            }
+          }
+        } catch { /* window unknown: the message and result-based options still apply */ }
+      }
       const { result, messages } = await withTimeout($, compactSession(event.messages, config, async (url, init) => {
         const response = await withTimeout($, $.http.fetch(url, init), JEV_CALL_TIMEOUT_MS, 'Jev request');
         return { status: response.status, ok: response.ok, text: response.text };

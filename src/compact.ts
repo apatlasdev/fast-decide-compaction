@@ -1,6 +1,7 @@
 import { noulAnswer } from './request.js';
 import { compactChunked } from './chunk.js';
-import { reusedCallIds } from './reuse.js';
+import { reusedCallIds, laterIdentifierSets } from './reuse.js';
+import { citedIn, DEFAULT_EXTRACT, extractCitedLines } from './extract.js';
 import { trimToTarget } from './target.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
@@ -23,6 +24,8 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   preserveRecentMessages: 40,
   reuseKeep: true,
   targetChars: 0,
+  extractCited: false,
+  extractOldText: false,
   preserveRecentChars: 0,
   reuseMinHits: 2,
   reuseBudgetChars: 400_000,
@@ -63,6 +66,8 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     ),
     reuseKeep: options.reuseKeep ?? DEFAULT_OPTIONS.reuseKeep,
     targetChars: Math.max(0, finite(options.targetChars, DEFAULT_OPTIONS.targetChars)),
+    extractCited: options.extractCited ?? DEFAULT_OPTIONS.extractCited,
+    extractOldText: options.extractOldText ?? DEFAULT_OPTIONS.extractOldText,
     preserveRecentChars: Math.max(0, finite(options.preserveRecentChars, DEFAULT_OPTIONS.preserveRecentChars)),
     reuseMinHits: Math.max(1, Math.floor(finite(options.reuseMinHits, DEFAULT_OPTIONS.reuseMinHits))),
     reuseBudgetChars: Math.max(0, finite(options.reuseBudgetChars, DEFAULT_OPTIONS.reuseBudgetChars)),
@@ -403,8 +408,44 @@ export async function compact(
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
+  // Line extraction: kept results and old long assistant messages shrink to the lines that
+  // contain identifiers cited later; every kept line is verbatim.
+  let workMessages: readonly Message[] = messages;
+  if (resolved.extractCited || resolved.extractOldText) {
+    const later = laterIdentifierSets(messages);
+    const copy = messages.slice();
+    const pinnedFrom = messages.length - resolved.preserveRecentMessages;
+    if (resolved.extractCited) {
+      const callById = new Map(calls.map((call) => [call.id, call]));
+      for (const decision of decisions) {
+        if (decision.action !== 'keep' || decision.reason !== 'kept') continue;
+        const call = callById.get(decision.id);
+        const source = call ? copy[call.resultIndex] : undefined;
+        if (!call || !source?.toolResults) continue;
+        let changed = false;
+        const results = source.toolResults.map((result) => {
+          if (result.tool_use_id !== call.tool_use_id) return result;
+          const text = extractCitedLines(result.text, citedIn(result.text, later[call.resultIndex]!));
+          if (text === result.text) return result;
+          changed = true;
+          call.resultChars = text.length;
+          return { tool_use_id: result.tool_use_id, text, isError: result.isError };
+        });
+        if (changed) copy[call.resultIndex] = { role: source.role, text: source.text, toolUses: source.toolUses, toolResults: results };
+      }
+    }
+    if (resolved.extractOldText) {
+      for (let i = 1; i < pinnedFrom; i++) {
+        const message = copy[i]!;
+        if (message.role !== 'assistant' || message.text.length < 1200) continue;
+        const text = extractCitedLines(message.text, citedIn(message.text, later[i]!), { ...DEFAULT_EXTRACT, minChars: 1200 });
+        if (text !== message.text) copy[i] = { role: message.role, text, toolUses: message.toolUses, toolResults: message.toolResults };
+      }
+    }
+    workMessages = copy;
+  }
   let kept = applyDecisions(
-    messages,
+    workMessages,
     decisions,
     calls,
     resolved.truncateHeadChars,
@@ -424,7 +465,7 @@ export async function compact(
       inputChars,
     );
     if (trimmed.trimmedResults + trimmed.trimmedCalls > 0) {
-      kept = applyDecisions(messages, decisions, calls, resolved.truncateHeadChars);
+      kept = applyDecisions(workMessages, decisions, calls, resolved.truncateHeadChars);
     }
   }
   return {

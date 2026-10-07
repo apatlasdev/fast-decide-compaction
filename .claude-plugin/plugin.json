@@ -25,8 +25,8 @@
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Context percentage at which compaction starts (default 60; 20 in economy mode).",
-      "default": 60
+      "description": "Percent of the model's context window at which compaction starts (default 67).",
+      "default": 67
     },
     "minReductionRatio": {
       "type": "number",
@@ -61,24 +61,12 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "fidelity (default): keep as much as the work cites. economy: compact early and keep a small context to cut per-turn cost.",
+      "description": "fidelity (default): keep as much as the work cites. economy: same trigger, but keep a small context (newest 2% of the window whole, trimmed to about 4%) so it costs about the same as a summary.",
       "default": "fidelity",
       "options": [
         "fidelity",
         "economy"
       ]
-    },
-    "preserveRecentTokens": {
-      "type": "number",
-      "title": "Newest tokens kept whole",
-      "description": "Keep every message in the newest N tokens (like a retained tail). 0 = off.",
-      "default": 0
-    },
-    "targetTokens": {
-      "type": "number",
-      "title": "Target size in tokens",
-      "description": "After deciding, trim the lowest-value kept results until history is about this size. 0 = off.",
-      "default": 0
     },
     "reuseMinHits": {
       "type": "number",
@@ -91,6 +79,30 @@
       "title": "Reuse budget (characters)",
       "description": "Most characters of extra results the reuse check may keep.",
       "default": 400000
+    },
+    "preserveRecentPercent": {
+      "type": "number",
+      "title": "Newest percent of window kept whole",
+      "description": "Keep every message in the newest N% of the model's context window (economy mode: 2).",
+      "default": 0
+    },
+    "targetPercent": {
+      "type": "number",
+      "title": "Target size, percent of window",
+      "description": "Trim the compacted history to about N% of the model's context window (economy mode: 4). 0 = off.",
+      "default": 0
+    },
+    "extractCited": {
+      "type": "boolean",
+      "title": "Extract cited lines from results",
+      "description": "Experimental, no measured gain: keep only the lines of long kept tool results that contain identifiers the later conversation cites.",
+      "default": false
+    },
+    "extractOldText": {
+      "type": "boolean",
+      "title": "Extract cited lines from old assistant text",
+      "description": "Experimental, no measured gain: same line extraction for long old assistant messages.",
+      "default": false
     }
   }
 }
