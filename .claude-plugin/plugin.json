@@ -61,11 +61,11 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "fidelity (default): keep as much as the work cites. economy: same trigger, but keep a small context (newest 2% of the window whole, trimmed to about 4%) so it costs about the same as a summary.",
-      "default": "fidelity",
+      "description": "economy (default): compact at the trigger, keep the newest 2% of the window whole and trim to about 4%, so a long session costs less per turn. fidelity: keep far more of the history (costs more per turn).",
+      "default": "economy",
       "options": [
-        "fidelity",
-        "economy"
+        "economy",
+        "fidelity"
       ]
     },
     "reuseMinHits": {

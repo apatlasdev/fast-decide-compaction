@@ -79,7 +79,8 @@ const ECONOMY_PRESET = {
 } as const;
 
 export function resolveHookConfig(options: PluginOptions): HookConfig {
-  const economy = optionString(options, 'mode') === 'economy';
+  // Economy is the default: it is the mode that lowers spend. `mode: fidelity` keeps far more of the history.
+  const economy = optionString(options, 'mode') !== 'fidelity';
   const numbers: Partial<Omit<CompactOptions, 'goal'>> = economy
     ? { preserveRecentMessages: ECONOMY_PRESET.preserveRecentMessages }
     : {};

@@ -44,16 +44,16 @@ const { messages } = await compactWire('openai', myChatMessages, client, { prese
 
 **Keeps the work flowing.** Claude Code compacts on its own in the middle of a turn, between model requests, and the turn simply carries on; background commands keep running through it. To make that happen at 67% of *whatever the model's window is* (instead of ~97%), set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=67` in the `env` block of `~/.claude/settings.json`. This plugin's `session.compact` hook then does the Decide compaction in a few seconds, with no stop and no queued command. The queued `/compact` described above is only a fallback for hosts where that setting is unavailable; it ends the turn, so work does not resume by itself.
 
-**Cost: what actually moves it.** Every turn re-reads the whole context, so cost follows how much you keep and how early you compact. `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06; prompt caching on; 4k new and 600 output tokens per turn; a 20k-token summary; trigger at 67% of a 1M window):
+**Cost: how it saves money.** Most of a long session's bill is cached reads of the context, once per turn, so cost follows how large the context is on average. Claude Code's default compacts at ~97% of the window and leaves ~20k tokens; this plugin compacts at 67% and, in the default `economy` mode, keeps about 40k tokens (newest 2% of the window whole, trimmed to ~4%, the results the conversation cites kept first). `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06; prompt caching on; 4k new and 600 output tokens per turn; a 20k-token summary on the default path):
 
-| Model | Summary, $/turn | Economy mode (keeps ~40k tokens) | Fidelity mode (keeps ~50%) |
+| Model | Default (97%, summary) $/turn | Plugin economy mode | Plugin fidelity mode (keeps ~50%) |
 |---|---|---|---|
-| Claude Sonnet 5.5 | $0.087 | +0.3% | +45% |
-| Claude Opus 5.5 | $0.105 | -0.6% | +45% |
-| GPT-6.1 Sol | $0.053 | -0.6% | +45% |
-| GPT-6 Astra | $0.437 | +0.3% | +45% |
+| Claude Sonnet 5.5 | $0.117 | -25% | +8% |
+| Claude Opus 5.5 | $0.134 | -22% | +14% |
+| GPT-6.1 Sol | $0.067 | -22% | +14% |
+| GPT-6 Astra | $0.584 | -25% | +8% |
 
-At a 67% trigger this does **not** save money: economy mode costs about the same as a summary, fidelity mode costs 45% more because it keeps more. The money lever is compacting earlier (`node scripts/cost-model.mjs --sweep`: compacting at 200k instead of 900k is about 50-60% cheaper per turn on every model above), which any tool can do and which gives up context. What this tool adds is *what survives*, shown next. All of this is a model with assumed turn sizes, not a measured bill.
+Be clear about where the saving comes from: the 67% trigger. A plain summary at 67% saves the same 22-25%; economy mode matches that cost while keeping exact tool output instead of a summary (recall below). Fidelity mode keeps so much that it costs *more* than the default. Compacting earlier saves more (`node scripts/cost-model.mjs --sweep`) but gives up context. This is a model with assumed turn sizes, not a measured bill. Prompt-cache note: in three long real sessions, about two thirds of all cache-write tokens were full rewrites of a big context (idle gaps over 5 minutes were about a third of those, model switches and compactions a few percent, the rest unexplained), and Claude Code's 1-hour cache option (`ENABLE_PROMPT_CACHING_1H=1`) raises the price of every write, which for these sessions would cost more than the rewrites it avoids.
 
 **Recall at size** (replay of real sessions: share of the paths, ids and error names used later that survive; 3 slices of one agent's sessions, small sample):
 
