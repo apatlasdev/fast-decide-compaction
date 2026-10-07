@@ -5,6 +5,48 @@ every tool call and result is scored in one fast request, stale ones are
 dropped or truncated, everything kept stays verbatim. Also usable as an npm
 library.
 
+## Overview
+
+**What it does.** When a session gets long, most tools ask an LLM to write a summary of the old turns. This replaces that with Mercury Decide, a fast decision model: for every old tool call and result it answers "still needed?". Needed ones stay **word for word**; the rest are shortened or removed. Nothing is rewritten, so exact file paths, errors and commands survive. On top of Decide it adds a recency floor (the newest 40 messages are never touched) and a text check that keeps any result whose paths, ids or error names the later conversation keeps mentioning. Big histories are decided in windows; free-tier rate limits are retried.
+
+**Where it works**
+
+| Host | How it runs | Status |
+|---|---|---|
+| Claude Code in a terminal | plugin hook; compacts when context passes the threshold (default 60%) | worked in real sessions |
+| Claude desktop app / headless (SDK) | the host cannot start a compaction from a hook, so the plugin queues `/compact` once context passes the threshold; the same Decide compaction then runs | worked in real sessions (trace in `~/.claude/fast-decide-trace.log`) |
+| Codex | hooks in `codex/` style config; trusted-hook entries required | works in a test harness; not checked in a live Codex compaction |
+| Any other harness | `decide-compact` CLI or `compactWire()` for Anthropic Messages, OpenAI Chat and a neutral format | tested with synthetic histories only |
+
+**Bring your own key.** It needs *your own* OpenRouter API key (`OPENROUTER_API_KEY`) and uses the free model `inception/mercury-decide:free` by default. No key, endpoint account or data goes through anyone else's service. Only the structure of your session (tool names, short snippets, ids) is sent to OpenRouter; check their terms before using it on private code.
+
+**Other harnesses**
+
+```bash
+npm install && npm run build
+cat messages.json | OPENROUTER_API_KEY=... npx decide-compact --format anthropic --stats > compacted.json
+```
+
+```ts
+import { JevClient, compactWire } from 'fast-decide-compaction';
+const client = new JevClient({ apiKey: process.env.OPENROUTER_API_KEY, model: 'inception/mercury-decide:free',
+  baseUrl: 'https://openrouter.ai/api/alpha/decisions' });
+const { messages } = await compactWire('openai', myChatMessages, client, { preserveRecentMessages: 40 });
+```
+
+`compactWire` takes `anthropic`, `openai` or `generic` messages, returns the same format, hands back untouched messages as your own objects, and keeps tool calls and their results paired. The core (`compact()`) works on a neutral shape, so a new harness needs only a converter.
+
+**Cost: read this before assuming savings.** Run `npm run cost` to see the model. It compares a built-in summary against this at the same trigger point, using OpenRouter's list prices (checked 2026-10-06) with prompt caching:
+
+| Model | Summary $/turn | fast-decide, ~90% smaller | ~70% smaller | ~50% smaller |
+|---|---|---|---|---|
+| Claude Sonnet 5.5 | $0.081 | +3% | +22% | +44% |
+| Claude Opus 5.5 | $0.098 | +2% | +21% | +44% |
+| GPT-6.1 Sol | $0.049 | +2% | +21% | +44% |
+| GPT-6 Astra | $0.403 | +3% | +22% | +44% |
+
+It does **not** save money on its own: Mercury's calls are free, but keeping more context means every later turn re-reads more, and the first turn after compaction rewrites a bigger cache. With caching the tool costs about the same as a summary when it shrinks the history ~90% (recall is low there) and 20-44% more when it keeps what the work needs. It pays for itself only if the summary makes the agent re-read files or redo work: about 32 extra re-read turns per 145-turn cycle at ~70% smaller, 64 at ~50%. Without prompt caching the numbers are similar (+5% to +43%). The model assumes 4,000 new tokens and 600 output tokens per turn, a 600k-token trigger and a 20k-token summary; edit them in `scripts/cost-model.mjs`. Treat the benefit as keeping exact detail, not as a bill reduction.
+
 ## What and why
 
 Most context compaction asks an LLM to summarize old turns. A summary is

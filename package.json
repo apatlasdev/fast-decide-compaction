@@ -1,7 +1,7 @@
 {
   "name": "fast-decide-compaction",
-  "version": "0.2.0",
-  "description": "Continuous, verbatim context compaction for LLM agents using TypeSafe's Jev model.",
+  "version": "0.3.0",
+  "description": "Verbatim context compaction for LLM agents using Mercury Decide (bring your own OpenRouter key). Plugin for Claude Code and Codex, plus adapters for other harnesses.",
   "type": "module",
   "license": "MIT",
   "engines": {
@@ -15,6 +15,7 @@
   },
   "files": [
     "dist",
+    "bin",
     "README.md",
     "LICENSE"
   ],
@@ -24,12 +25,16 @@
     "test": "vitest run",
     "demo": "tsx examples/demo.ts",
     "typecheck:hooks": "tsc -p tsconfig.hooks.json",
-    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json"
+    "validate:plugin": "claude plugin validate .claude-plugin/plugin.json",
+    "cost": "node scripts/cost-model.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.10.2",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
+  },
+  "bin": {
+    "decide-compact": "./bin/decide-compact.mjs"
   }
 }
