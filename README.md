@@ -13,12 +13,12 @@ library.
 
 | Host | How it runs | Status |
 |---|---|---|
-| Claude Code in a terminal | plugin hook; compacts when context passes the threshold (default 60%) | worked in real sessions |
-| Claude desktop app / headless (SDK) | the host cannot start a compaction from a hook, so the plugin queues `/compact` once context passes the threshold; the same Decide compaction then runs | worked in real sessions (trace in `~/.claude/fast-decide-trace.log`) |
-| Codex | hooks in `codex/` style config; trusted-hook entries required | works in a test harness; not checked in a live Codex compaction |
+| Claude Code in a terminal | plugin hook; compacts when context passes the threshold (default 60%) | designed for it (the original plugin's mode); not separately verified on this fork |
+| Claude desktop app / headless (SDK) | the host cannot start a compaction from a hook, so the plugin queues `/compact` once context passes the threshold; the same Decide compaction then runs | worked in two long sessions (see `~/.claude/fast-decide-trace.log`); the ledger has about 20 compactions |
+| Codex | hook entries in `~/.codex/config.toml`, each marked trusted (Codex silently skips untrusted hooks); the library files are the same code built to JavaScript | loads and passes its tests; not checked in a live Codex compaction |
 | Any other harness | `decide-compact` CLI or `compactWire()` for Anthropic Messages, OpenAI Chat and a neutral format | tested with synthetic histories only |
 
-**Bring your own key.** It needs *your own* OpenRouter API key (`OPENROUTER_API_KEY`) and uses the free model `inception/mercury-decide:free` by default. No key, endpoint account or data goes through anyone else's service. Only the structure of your session (tool names, short snippets, ids) is sent to OpenRouter; check their terms before using it on private code.
+**Bring your own key.** It needs *your own* OpenRouter API key (`OPENROUTER_API_KEY`) and uses the free model `inception/mercury-decide:free` by default. No shared key or account is involved. A condensed view of your session (tool names, tool inputs, abridged tool results and recent prompts) is sent to OpenRouter's Mercury Decide endpoint, so check their terms before using it on private code.
 
 **Other harnesses**
 
