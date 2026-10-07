@@ -47,7 +47,7 @@ const { messages } = await compactWire('openai', myChatMessages, client, { prese
 
 Read it honestly: most of the saving comes from compacting early, which any tool can do. What this adds is that compaction at that point keeps more of what the work needs (see recall below) and skips the summary call (a 12-15% edge at equal size). Economy mode is a modelled estimate, not a measured bill. In **fidelity mode** (default) the history stays large, so it costs *more* per turn than a summary (+2% at ~90% smaller up to +44% at ~50% smaller); it pays off only if the summary would have made the agent re-read or redo work (about 32-64 extra turns per 145-turn cycle).
 
-Set `mode` to `economy` in the plugin settings (or `compactAtPercent`, `preserveRecentTokens`, `targetTokens` yourself): it compacts at 20% of the window, keeps the newest ~20k tokens whole, and trims the rest to about 40k tokens, keeping first the results the conversation cites.
+Set `mode` to `economy` in the plugin settings (or `compactAtPercent`, `preserveRecentTokens`, `targetTokens` yourself): it compacts at 20% of the window, keeps the newest ~20k tokens whole, and trims the rest to about 40k tokens, keeping first the results the conversation cites. The preset assumes a ~1M-token window (20% = 200k); on a 200k window set `compactAtPercent` to about 60 yourself, or it would compact almost immediately.
 
 **Recall at size** (replay of real sessions: share of the paths, ids and error names used later that survive; 3 slices of one agent, small sample):
 
