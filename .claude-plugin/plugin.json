@@ -103,6 +103,18 @@
       "title": "Extract cited lines from old assistant text",
       "description": "Experimental, no measured gain: same line extraction for long old assistant messages.",
       "default": false
+    },
+    "archive": {
+      "type": "boolean",
+      "title": "Archive dropped tool output",
+      "description": "Save the full text of shortened tool results under ~/.claude/fast-decide-archive and point to it, so the agent can read it back instead of re-running the tool.",
+      "default": true
+    },
+    "activityIndex": {
+      "type": "boolean",
+      "title": "List dropped tool calls",
+      "description": "Add one short message listing every dropped tool call (tool and key argument) so the agent knows what was already done.",
+      "default": true
     }
   }
 }

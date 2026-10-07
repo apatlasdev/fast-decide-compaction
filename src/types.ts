@@ -105,6 +105,12 @@ export interface CompactOptions {
   targetChars?: number;
   /** Keep only the lines of long kept tool results that contain identifiers the conversation cites later (verbatim lines, rest omitted). */
   extractCited?: boolean;
+  /** Tools whose results are never dropped (the user's own answers and plan approvals). Default AskUserQuestion, ExitPlanMode. */
+  alwaysKeepTools?: string[];
+  /** When set, dropped results are listed in `result.archives` for the caller to save, and each truncation note points to `<archiveDir>/<tool_use_id>.txt`. */
+  archiveDir?: string;
+  /** Add one short message listing every dropped tool call (tool and key argument) so the agent knows what was already done. */
+  activityIndex?: boolean;
   /** Same line extraction for long assistant messages older than the protected tail. */
   extractOldText?: boolean;
   /** Also keep every message in the newest N characters (like Unreal Agent's retained-token budget). 0 = off. */
@@ -128,6 +134,9 @@ export interface ResolvedCompactOptions {
   reuseKeep: boolean;
   targetChars: number;
   extractCited: boolean;
+  alwaysKeepTools: string[];
+  archiveDir: string;
+  activityIndex: boolean;
   extractOldText: boolean;
   preserveRecentChars: number;
   reuseMinHits: number;
@@ -140,6 +149,8 @@ export interface ResolvedCompactOptions {
 export interface CompactResult {
   /** The compacted transcript; untouched messages are the input objects. */
   messages: Message[];
+  /** Full text of dropped results, to be saved by the caller at `path` (empty unless `archiveDir` is set). */
+  archives: { path: string; text: string }[];
   decisions: CallDecision[];
   stats: {
     messagesBefore: number;

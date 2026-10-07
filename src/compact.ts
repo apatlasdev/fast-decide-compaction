@@ -25,6 +25,9 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   reuseKeep: true,
   targetChars: 0,
   extractCited: false,
+  alwaysKeepTools: ['AskUserQuestion', 'ExitPlanMode'],
+  archiveDir: '',
+  activityIndex: false,
   extractOldText: false,
   preserveRecentChars: 0,
   reuseMinHits: 2,
@@ -67,6 +70,9 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
     reuseKeep: options.reuseKeep ?? DEFAULT_OPTIONS.reuseKeep,
     targetChars: Math.max(0, finite(options.targetChars, DEFAULT_OPTIONS.targetChars)),
     extractCited: options.extractCited ?? DEFAULT_OPTIONS.extractCited,
+    alwaysKeepTools: options.alwaysKeepTools ?? DEFAULT_OPTIONS.alwaysKeepTools,
+    archiveDir: options.archiveDir ?? DEFAULT_OPTIONS.archiveDir,
+    activityIndex: options.activityIndex ?? DEFAULT_OPTIONS.activityIndex,
     extractOldText: options.extractOldText ?? DEFAULT_OPTIONS.extractOldText,
     preserveRecentChars: Math.max(0, finite(options.preserveRecentChars, DEFAULT_OPTIONS.preserveRecentChars)),
     reuseMinHits: Math.max(1, Math.floor(finite(options.reuseMinHits, DEFAULT_OPTIONS.reuseMinHits))),
@@ -209,12 +215,12 @@ async function askBatch(
   );
 }
 
-function truncatedResultText(text: string, isError: boolean, headChars: number): string {
+function truncatedResultText(text: string, isError: boolean, headChars: number, pointer?: string): string {
   if (text.length <= headChars + 120) return text;
   const head = headChars > 0 ? `${text.slice(0, headChars)}\n` : '';
   return `${head}[fast-jev-compaction truncated ${text.length - headChars} chars of this tool result${
     isError ? ' (error)' : ''
-  }; re-run the tool if needed]`;
+  }; ${pointer ? `full output saved at ${pointer}` : 're-run the tool if needed'}]`;
 }
 
 /**
@@ -228,6 +234,7 @@ export function applyDecisions(
   decisions: readonly CallDecision[],
   calls: readonly ToolCall[],
   headChars: number,
+  pointers: ReadonlyMap<string, string> = new Map(),
 ): Message[] {
   const byId = new Map(calls.map((call) => [call.id, call]));
   const actions = new Map<string, CallDecision['action']>();
@@ -252,6 +259,7 @@ export function applyDecisions(
           tool.text ?? '',
           tool.isError ?? false,
           headChars,
+          pointers.get(tool.tool_use_id),
         );
         if ((tool.text ?? '') === text) return tool;
         const copy: ToolUse = {
@@ -267,7 +275,7 @@ export function applyDecisions(
       .filter((result) => actions.get(result.tool_use_id) !== 'drop_call')
       .map((result) => {
         if (actions.get(result.tool_use_id) !== 'drop_result') return result;
-        const text = truncatedResultText(result.text, result.isError ?? false, headChars);
+        const text = truncatedResultText(result.text, result.isError ?? false, headChars, pointers.get(result.tool_use_id));
         return text === result.text
           ? result
           : {
@@ -299,6 +307,36 @@ export function applyDecisions(
     kept.push(rebuilt);
   }
   return kept;
+}
+
+/** One compact line per dropped call: what was run and, if archived, where the full output is. */
+export function activityNote(
+  decisions: readonly CallDecision[],
+  calls: readonly ToolCall[],
+  pointers: ReadonlyMap<string, string>,
+  maxChars = 30_000,
+): string {
+  const byId = new Map(calls.map((call) => [call.id, call]));
+  const lines: string[] = [];
+  for (const decision of decisions) {
+    if (decision.action !== 'drop_call') continue;
+    const call = byId.get(decision.id);
+    if (!call) continue;
+    const input = call.input ?? {};
+    const key = ['command', 'file_path', 'path', 'pattern', 'url', 'query', 'description', 'prompt']
+      .map((name) => input[name])
+      .find((value) => typeof value === 'string') as string | undefined;
+    const arg = (key ?? JSON.stringify(input)).split(String.fromCharCode(10))[0]!.slice(0, 90);
+    const where = pointers.get(call.tool_use_id);
+    lines.push(`${call.tool}: ${arg}${where ? ` -> ${where}` : ''}`);
+  }
+  if (lines.length < 3) return '';
+  let body = lines.join(String.fromCharCode(10));
+  while (body.length > maxChars && lines.length > 3) {
+    lines.shift();
+    body = lines.join(String.fromCharCode(10));
+  }
+  return `[fast-decide-compaction: earlier tool activity whose details were dropped (oldest first)]${String.fromCharCode(10)}${body}`;
 }
 
 /** Characters of text, tool input and tool output a message holds. */
@@ -405,9 +443,33 @@ export async function compact(
     for (const id of reuseOrder) answers.set(id, { keepCall: 1, keepResult: 1 });
   }
 
+  const alwaysKeep = new Set(resolved.alwaysKeepTools);
   const decisions = calls.map((call) =>
-    decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
+    alwaysKeep.has(call.tool)
+      ? ({ id: call.id, tool: call.tool, keepCall: 1, keepResult: 1, action: 'keep', reason: 'kept' } as CallDecision)
+      : decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
+  // Archive: full text of every dropped result goes to `<archiveDir>/<tool_use_id>.txt` (saved by the caller).
+  const archives: { path: string; text: string }[] = [];
+  const pointers = new Map<string, string>();
+  const fillArchive = (): void => {
+    archives.length = 0;
+    pointers.clear();
+    if (!resolved.archiveDir) return;
+    const decisionById = new Map(decisions.map((d) => [d.id, d]));
+    for (const call of calls) {
+      const decision = decisionById.get(call.id);
+      if (!decision || decision.action === 'keep') continue;
+      const result = messages[call.resultIndex]?.toolResults?.find((r) => r.tool_use_id === call.tool_use_id);
+      if (!result || result.text.length <= resolved.truncateHeadChars + 120) continue;
+      let dir = resolved.archiveDir;
+      while (dir.endsWith('/') || dir.endsWith(String.fromCharCode(92))) dir = dir.slice(0, -1);
+      const path = `${dir}/${call.tool_use_id}.txt`;
+      archives.push({ path, text: result.text });
+      pointers.set(call.tool_use_id, path);
+    }
+  };
+  fillArchive();
   // Line extraction: kept results and old long assistant messages shrink to the lines that
   // contain identifiers cited later; every kept line is verbatim.
   let workMessages: readonly Message[] = messages;
@@ -449,6 +511,7 @@ export async function compact(
     decisions,
     calls,
     resolved.truncateHeadChars,
+    pointers,
   );
   if (resolved.targetChars > 0) {
     const now = kept.reduce((sum, message) => sum + messageChars(message), 0);
@@ -465,11 +528,17 @@ export async function compact(
       inputChars,
     );
     if (trimmed.trimmedResults + trimmed.trimmedCalls > 0) {
-      kept = applyDecisions(workMessages, decisions, calls, resolved.truncateHeadChars);
+      fillArchive();
+      kept = applyDecisions(workMessages, decisions, calls, resolved.truncateHeadChars, pointers);
     }
+  }
+  if (resolved.activityIndex) {
+    const note = activityNote(decisions, calls, pointers);
+    if (note) kept = [kept[0]!, { role: 'user', text: note, toolUses: [] }, ...kept.slice(1)];
   }
   return {
     messages: kept,
+    archives,
     decisions,
     stats: {
       messagesBefore: messages.length,

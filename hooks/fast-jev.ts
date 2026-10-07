@@ -419,10 +419,34 @@ export const register: Register = (on: On, options: PluginOptions) => {
           }
         } catch { /* window unknown: the message and result-based options still apply */ }
       }
+      // Archive dropped tool output to disk (the agent can read it back instead of re-running the tool)
+      // and add a short index of dropped calls. Both default on; set `archive` / `activityIndex` false to turn off.
+      if (options['activityIndex'] !== false) config.activityIndex = true;
+      if (options['archive'] !== false) {
+        try {
+          const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'));
+          if (home) {
+            const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+            const dir = `${home}/.claude/fast-decide-archive/${stamp}`;
+            await $.fs.write(`${dir}/README.txt`, 'Full text of tool results that fast-decide-compaction shortened. File name = tool_use_id.');
+            config.archiveDir = dir;
+          }
+        } catch { /* cannot write: compact without pointers */ }
+      }
       const { result, messages } = await withTimeout($, compactSession(event.messages, config, async (url, init) => {
         const response = await withTimeout($, $.http.fetch(url, init), JEV_CALL_TIMEOUT_MS, 'Jev request');
         return { status: response.status, ok: response.ok, text: response.text };
       }), JEV_COMPACT_BUDGET_MS, 'Jev compaction');
+      if (result.archives.length > 0) {
+        const MAX_FILE = 200_000;
+        for (let i = 0; i < result.archives.length; i += 8) {
+          await Promise.all(
+            result.archives.slice(i, i + 8).map((a) =>
+              $.fs.write(a.path, a.text.length > MAX_FILE ? a.text.slice(0, MAX_FILE) + ' [archive cut at 200000 characters]' : a.text).catch(() => undefined),
+            ),
+          );
+        }
+      }
       // The per-call table is thousands of characters on big sessions; the summary line below
       // already says what happened. Set FAST_DECIDE_VERBOSE=1 to print every decision.
       let verbose = false;

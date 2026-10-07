@@ -36,6 +36,12 @@ const { messages } = await compactWire('openai', myChatMessages, client, { prese
 
 `compactWire` takes `anthropic`, `openai` or `generic` messages, returns the same format, hands back untouched messages as your own objects, and keeps tool calls and their results paired. The core (`compact()`) works on a neutral shape, so a new harness needs only a converter.
 
+**Safety and recovery (Claude Code plugin; library options `alwaysKeepTools`, `archiveDir`, `activityIndex`).**
+- Results of `AskUserQuestion` and `ExitPlanMode` are never dropped, so the user's own answers and plan approvals survive.
+- Every shortened tool result is saved in full under `~/.claude/fast-decide-archive/<time>/<tool_use_id>.txt` and the stub says where, so the agent can read it back instead of re-running the tool. (The folder is not pruned automatically; delete old folders when you like. Each file is cut at 200,000 characters.)
+- One short message after the first one lists every dropped call (`Bash: git status -> <archive path>`), so the agent knows what was already done and does not repeat it.
+- All three are off by default in the library and on in the plugin (`archive`, `activityIndex` settings). They are not measured by the replay test below; the archive and index trade a few thousand tokens for a way back to the detail.
+
 **Keeps the work flowing.** Claude Code compacts on its own in the middle of a turn, between model requests, and the turn simply carries on; background commands keep running through it. To make that happen at 67% of *whatever the model's window is* (instead of ~97%), set `CLAUDE_AUTOCOMPACT_PCT_OVERRIDE=67` in the `env` block of `~/.claude/settings.json`. This plugin's `session.compact` hook then does the Decide compaction in a few seconds, with no stop and no queued command. The queued `/compact` described above is only a fallback for hosts where that setting is unavailable; it ends the turn, so work does not resume by itself.
 
 **Cost: what actually moves it.** Every turn re-reads the whole context, so cost follows how much you keep and how early you compact. `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06; prompt caching on; 4k new and 600 output tokens per turn; a 20k-token summary; trigger at 67% of a 1M window):
