@@ -1,13 +1,13 @@
 {
   "name": "fast-decide-compaction",
   "version": "0.3.0",
-  "description": "Verbatim Jev-guided compaction for Claude Code sessions.",
+  "description": "Verbatim context compaction with Mercury Decide (OpenRouter). Keeps what the work still needs word for word; fidelity and economy modes.",
   "license": "MIT",
   "userConfig": {
     "apiKey": {
       "type": "string",
-      "title": "TypeSafe API key",
-      "description": "TypeSafe API key. Leave unset to use TYPESAFE_API_KEY.",
+      "title": "OpenRouter API key",
+      "description": "Your own OpenRouter API key. Leave unset to use the OPENROUTER_API_KEY environment variable.",
       "sensitive": true
     },
     "keepThreshold": {
@@ -19,13 +19,13 @@
     "preserveRecentMessages": {
       "type": "number",
       "title": "Recent messages to preserve",
-      "description": "Number of newest messages pinned from compaction.",
-      "default": 6
+      "description": "Newest messages never touched (default 40; economy mode uses 10 plus a character tail).",
+      "default": 40
     },
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Context percentage at which turn.complete requests compaction.",
+      "description": "Context percentage at which compaction starts (default 60; 20 in economy mode).",
       "default": 60
     },
     "minReductionRatio": {
@@ -54,9 +54,43 @@
     },
     "model": {
       "type": "string",
-      "title": "Jev model",
-      "description": "TypeSafe Jev model name.",
-      "default": "jev-latest"
+      "title": "Decide model",
+      "description": "Decision model on OpenRouter.",
+      "default": "inception/mercury-decide:free"
+    },
+    "mode": {
+      "type": "string",
+      "title": "Mode",
+      "description": "fidelity (default): keep as much as the work cites. economy: compact early and keep a small context to cut per-turn cost.",
+      "default": "fidelity",
+      "options": [
+        "fidelity",
+        "economy"
+      ]
+    },
+    "preserveRecentTokens": {
+      "type": "number",
+      "title": "Newest tokens kept whole",
+      "description": "Keep every message in the newest N tokens (like a retained tail). 0 = off.",
+      "default": 0
+    },
+    "targetTokens": {
+      "type": "number",
+      "title": "Target size in tokens",
+      "description": "After deciding, trim the lowest-value kept results until history is about this size. 0 = off.",
+      "default": 0
+    },
+    "reuseMinHits": {
+      "type": "number",
+      "title": "Reuse minimum hits",
+      "description": "Distinct identifiers of a result that must reappear later for it to be kept regardless of Decide.",
+      "default": 2
+    },
+    "reuseBudgetChars": {
+      "type": "number",
+      "title": "Reuse budget (characters)",
+      "description": "Most characters of extra results the reuse check may keep.",
+      "default": 400000
     }
   }
 }

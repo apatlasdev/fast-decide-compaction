@@ -22,7 +22,8 @@ const arg = (name, fallback) => {
   const i = process.argv.indexOf('--' + name);
   return i > 0 ? Number(process.argv[i + 1]) : fallback;
 };
-const C = arg('trigger', 600_000); // context size when compaction starts
+const TRIGGER = arg('trigger', 600_000); // context size when compaction starts
+const C = TRIGGER;
 const n = arg('new', 4_000); // new tokens per turn (tool results + replies)
 const o = arg('out', 600); // output tokens per turn
 const S = arg('summary', 20_000); // tokens an LLM summary writes
@@ -36,7 +37,7 @@ const CONFIGS = [
 ];
 
 const M = 1e-6;
-function perTurn(p, K, summary, cached) {
+function perTurn(p, K, summary, cached, C = TRIGGER) {
   const T = (C - K) / n;
   const avg = (K + C) / 2;
   const read = cached ? p.cacheRead : p.input;
@@ -87,5 +88,17 @@ for (const cache of ['cached', 'uncached']) {
 console.log('Break-even: extra "re-read" turns per summary cycle that the built-in summary would need to cause for fast-decide to cost the same (cached):');
 for (const r of rows.filter((x) => x.cache === 'cached' && x.model === 'Claude Sonnet 5.5')) {
   console.log('  ' + r.config.padEnd(56) + (Math.max(0, (r.change / 100) * r.turnsSummary)).toFixed(0) + ' turns per ' + r.turnsSummary.toFixed(0) + '-turn cycle');
+}
+
+if (process.argv.includes('--sweep')) {
+  // The biggest cost lever is how early you compact, not how you compact: every turn re-reads the whole context.
+  const keepTokens = arg('keep', 40_000); // context left after compaction in the sweep (both methods)
+  console.log('Trigger sweep (cached), context left after compaction = ' + keepTokens + ' tokens, $/turn:');
+  const triggers = [100_000, 200_000, 400_000, 600_000, 900_000];
+  console.log('model'.padEnd(20) + triggers.map((t) => ('@' + t / 1000 + 'k').padStart(10)).join(''));
+  for (const [model, p] of Object.entries(PRICES)) {
+    const cells = triggers.map((t) => fmt(perTurn(p, keepTokens, true, true, t).perTurn).padStart(10));
+    console.log(model.padEnd(20) + cells.join(''));
+  }
 }
 if (process.argv.includes('--json')) console.log(JSON.stringify(rows, null, 1));

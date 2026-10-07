@@ -66,11 +66,27 @@ function optionString(options: PluginOptions, key: string): string | undefined {
 // which avoids a separate TypeSafe account. Override with the `baseUrl` option.
 const OPENROUTER_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 
+// `mode: economy` trades fidelity for a smaller, cheaper context: compact at 20% of the window,
+// keep the newest ~20k tokens whole, and trim to about 40k tokens. Explicit options still win.
+const ECONOMY_PRESET = {
+  compactAtPercent: 20,
+  preserveRecentMessages: 10,
+  preserveRecentChars: 80_000,
+  targetChars: 160_000,
+} as const;
+
 export function resolveHookConfig(options: PluginOptions): HookConfig {
-  const numbers: Partial<Omit<CompactOptions, 'goal'>> = {};
+  const economy = optionString(options, 'mode') === 'economy';
+  const numbers: Partial<Omit<CompactOptions, 'goal'>> = economy
+    ? { preserveRecentMessages: ECONOMY_PRESET.preserveRecentMessages, preserveRecentChars: ECONOMY_PRESET.preserveRecentChars, targetChars: ECONOMY_PRESET.targetChars }
+    : {};
   for (const key of [
     'keepThreshold',
     'preserveRecentMessages',
+    'preserveRecentChars',
+    'targetChars',
+    'reuseMinHits',
+    'reuseBudgetChars',
     'maxStateTokens',
     'maxRequestTokens',
     'truncateHeadChars',
@@ -80,7 +96,7 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
   }
   const config: HookConfig = {
     ...numbers,
-    compactAtPercent: optionNumber(options, 'compactAtPercent', HOOK_DEFAULTS.compactAtPercent),
+    compactAtPercent: optionNumber(options, 'compactAtPercent', economy ? ECONOMY_PRESET.compactAtPercent : HOOK_DEFAULTS.compactAtPercent),
     minReductionRatio: optionNumber(
       options,
       'minReductionRatio',
@@ -88,6 +104,12 @@ export function resolveHookConfig(options: PluginOptions): HookConfig {
     ),
     model: optionString(options, 'model') ?? HOOK_DEFAULTS.model,
   };
+  const tokenKeys: [string, 'preserveRecentChars' | 'targetChars'][] = [['preserveRecentTokens', 'preserveRecentChars'], ['targetTokens', 'targetChars']];
+  for (const [tokenKey, charKey] of tokenKeys) {
+    const value = options[tokenKey];
+    if (typeof value === 'number' && Number.isFinite(value)) config[charKey] = Math.round(value * 4);
+  }
+  if (options['reuseKeep'] === false) config.reuseKeep = false;
   const baseUrl = optionString(options, 'baseUrl') ?? OPENROUTER_DECISIONS_URL;
   if (baseUrl) config.baseUrl = baseUrl;
   const apiKey = optionString(options, 'apiKey');

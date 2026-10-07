@@ -101,6 +101,10 @@ export interface CompactOptions {
   preserveRecentMessages?: number;
   /** Keep results whose identifiers the later conversation keeps mentioning. Default true. */
   reuseKeep?: boolean;
+  /** Economy mode: after deciding, trim the lowest-value kept results until the history is about this many characters (0 = off). */
+  targetChars?: number;
+  /** Also keep every message in the newest N characters (like Unreal Agent's retained-token budget). 0 = off. */
+  preserveRecentChars?: number;
   /** Distinct identifiers that must reappear for a result to count as reused. Default 2. */
   reuseMinHits?: number;
   /** Most characters of extra results the reuse step may keep. Default 400000. */
@@ -118,6 +122,8 @@ export interface ResolvedCompactOptions {
   keepThreshold: number;
   preserveRecentMessages: number;
   reuseKeep: boolean;
+  targetChars: number;
+  preserveRecentChars: number;
   reuseMinHits: number;
   reuseBudgetChars: number;
   maxStateTokens: number;

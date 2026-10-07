@@ -1,6 +1,7 @@
 import { noulAnswer } from './request.js';
 import { compactChunked } from './chunk.js';
 import { reusedCallIds } from './reuse.js';
+import { trimToTarget } from './target.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
   CallAnswer,
@@ -21,6 +22,8 @@ export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   keepThreshold: 0.5,
   preserveRecentMessages: 40,
   reuseKeep: true,
+  targetChars: 0,
+  preserveRecentChars: 0,
   reuseMinHits: 2,
   reuseBudgetChars: 400_000,
   maxStateTokens: 25_000,
@@ -59,6 +62,8 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
       ),
     ),
     reuseKeep: options.reuseKeep ?? DEFAULT_OPTIONS.reuseKeep,
+    targetChars: Math.max(0, finite(options.targetChars, DEFAULT_OPTIONS.targetChars)),
+    preserveRecentChars: Math.max(0, finite(options.preserveRecentChars, DEFAULT_OPTIONS.preserveRecentChars)),
     reuseMinHits: Math.max(1, Math.floor(finite(options.reuseMinHits, DEFAULT_OPTIONS.reuseMinHits))),
     reuseBudgetChars: Math.max(0, finite(options.reuseBudgetChars, DEFAULT_OPTIONS.reuseBudgetChars)),
     maxStateTokens: Math.max(1, finite(options.maxStateTokens, DEFAULT_OPTIONS.maxStateTokens)),
@@ -328,6 +333,18 @@ export async function compact(
 ): Promise<CompactResult> {
   const started = Date.now();
   const resolved = resolveOptions(options);
+  if (resolved.preserveRecentChars > 0) {
+    // Protect whole newest messages up to the character budget, never fewer than the message floor.
+    let budget = resolved.preserveRecentChars;
+    let count = 0;
+    for (let i = messages.length - 1; i >= 1; i--) {
+      const size = messageChars(messages[i]!);
+      if (budget - size < 0 && count > 0) break;
+      budget -= size;
+      count++;
+    }
+    resolved.preserveRecentMessages = Math.max(resolved.preserveRecentMessages, count);
+  }
   const calls = collectToolCalls(messages, resolved.preserveRecentMessages);
   const candidates = calls.filter((call) => !call.pinned);
   const charsBefore = messages.reduce((sum, message) => sum + messageChars(message), 0);
@@ -374,24 +391,42 @@ export async function compact(
 
   // Reuse override: results whose identifiers the conversation keeps referring to stay,
   // whatever Decide scored them. Plain text matching, no extra model call.
+  let reuseOrder: string[] = [];
   if (resolved.reuseKeep) {
-    for (const id of reusedCallIds(messages, calls, answers, resolved.keepThreshold, {
+    reuseOrder = reusedCallIds(messages, calls, answers, resolved.keepThreshold, {
       minHits: resolved.reuseMinHits,
       budgetChars: resolved.reuseBudgetChars,
-    })) {
-      answers.set(id, { keepCall: 1, keepResult: 1 });
-    }
+    });
+    for (const id of reuseOrder) answers.set(id, { keepCall: 1, keepResult: 1 });
   }
 
   const decisions = calls.map((call) =>
     decideCall(call, answers.get(call.id) ?? { keepCall: 1, keepResult: 1 }, resolved),
   );
-  const kept = applyDecisions(
+  let kept = applyDecisions(
     messages,
     decisions,
     calls,
     resolved.truncateHeadChars,
   );
+  if (resolved.targetChars > 0) {
+    const now = kept.reduce((sum, message) => sum + messageChars(message), 0);
+    const inputChars = new Map<string, number>();
+    for (const call of calls) inputChars.set(call.id, JSON.stringify(call.input ?? {}).length);
+    const trimmed = trimToTarget(
+      decisions,
+      calls,
+      answers,
+      reuseOrder,
+      now,
+      resolved.targetChars,
+      resolved.truncateHeadChars,
+      inputChars,
+    );
+    if (trimmed.trimmedResults + trimmed.trimmedCalls > 0) {
+      kept = applyDecisions(messages, decisions, calls, resolved.truncateHeadChars);
+    }
+  }
   return {
     messages: kept,
     decisions,

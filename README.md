@@ -36,16 +36,30 @@ const { messages } = await compactWire('openai', myChatMessages, client, { prese
 
 `compactWire` takes `anthropic`, `openai` or `generic` messages, returns the same format, hands back untouched messages as your own objects, and keeps tool calls and their results paired. The core (`compact()`) works on a neutral shape, so a new harness needs only a converter.
 
-**Cost: read this before assuming savings.** Run `npm run cost` to see the model. It compares a built-in summary against this at the same trigger point, using OpenRouter's list prices (checked 2026-10-06) with prompt caching:
+**Cost: what actually moves it.** Every turn re-reads the whole context, so the biggest lever is *how early you compact*, not how you compact. `npm run cost` models it with OpenRouter's list prices (checked 2026-10-06, prompt caching on, 4k new and 600 output tokens per turn, 20k-token summary):
 
-| Model | Summary $/turn | fast-decide, ~90% smaller | ~70% smaller | ~50% smaller |
-|---|---|---|---|---|
-| Claude Sonnet 5.5 | $0.081 | +3% | +22% | +44% |
-| Claude Opus 5.5 | $0.098 | +2% | +21% | +44% |
-| GPT-6.1 Sol | $0.049 | +2% | +21% | +44% |
-| GPT-6 Astra | $0.403 | +3% | +22% | +44% |
+| Model | Host default (summary at ~900k) | Summary at 200k | Economy mode at 200k | Economy vs host default | vs summary at 200k |
+|---|---|---|---|---|---|
+| Claude Sonnet 5.5 | $0.110/turn | $0.049 | $0.043 | -61% | -12% |
+| Claude Opus 5.5 | $0.127 | $0.072 | $0.061 | -52% | -15% |
+| GPT-6.1 Sol | $0.064 | $0.036 | $0.031 | -52% | -15% |
+| GPT-6 Astra | $0.550 | $0.243 | $0.213 | -61% | -12% |
 
-It does **not** save money on its own: Mercury's calls are free, but keeping more context means every later turn re-reads more, and the first turn after compaction rewrites a bigger cache. With caching the tool costs about the same as a summary when it shrinks the history ~90% (recall is low there) and 20-44% more when it keeps what the work needs. It pays for itself only if the summary makes the agent re-read files or redo work: about 32 extra re-read turns per 145-turn cycle at ~70% smaller, 64 at ~50%. Without prompt caching the numbers are similar (+5% to +43%). The model assumes 4,000 new tokens and 600 output tokens per turn, a 600k-token trigger and a 20k-token summary; edit them in `scripts/cost-model.mjs`. Treat the benefit as keeping exact detail, not as a bill reduction.
+Read it honestly: most of the saving comes from compacting early, which any tool can do. What this adds is that compaction at that point keeps more of what the work needs (see recall below) and skips the summary call (a 12-15% edge at equal size). Economy mode is a modelled estimate, not a measured bill. In **fidelity mode** (default) the history stays large, so it costs *more* per turn than a summary (+2% at ~90% smaller up to +44% at ~50% smaller); it pays off only if the summary would have made the agent re-read or redo work (about 32-64 extra turns per 145-turn cycle).
+
+Set `mode` to `economy` in the plugin settings (or `compactAtPercent`, `preserveRecentTokens`, `targetTokens` yourself): it compacts at 20% of the window, keeps the newest ~20k tokens whole, and trims the rest to about 40k tokens, keeping first the results the conversation cites.
+
+**Recall at size** (replay of real sessions: share of the paths, ids and error names used later that survive; 3 slices of one agent, small sample):
+
+| Setup | History left | Recall |
+|---|---|---|
+| LLM summary + last 40 messages | 3-5% | 23-44% |
+| Decide, recency tail 10% + target 15% | 19-56% | 57-81% |
+| Decide, tail 15% + target 25% | 25-58% | 71-88% |
+| Decide, tail 25% + target 40% | 38-64% | 80-88% |
+| Keep only the newest text, same sizes | same | 65-93% |
+
+The tail is the main source of recall. At equal size Decide + reuse is about level with keeping the newest text and clearly above a summary; it does not clearly beat the newest-text baseline. Slice B is mostly conversation text, which no trimming touches, so its history stays large.
 
 ## What and why
 
@@ -168,7 +182,7 @@ Experimental. What was measured, so you can judge it:
 - In real use on one long session (nine compactions), the agent carried on without visible loss of context.
 - Large histories are decided in windows of about 18k tokens; free-tier rate limits are retried with backoff.
 - In headless/SDK hosts (e.g. the Claude desktop app) the hook cannot start a compaction itself, so it queues `/compact` once context passes the threshold. Each step is written to `~/.claude/fast-decide-trace.log`.
-- The per-call decision table is not printed by default; set `FAST_DECIDE_VERBOSE=1` to see it. Options: `preserveRecentMessages` (default 40), `reuseKeep` (default true), `reuseMinHits` (2), `reuseBudgetChars` (400000).
+- The per-call decision table is not printed by default; set `FAST_DECIDE_VERBOSE=1` to see it. Options: `mode` (fidelity | economy), `preserveRecentMessages` (default 40), `preserveRecentTokens`, `targetTokens`, `reuseKeep` (default true), `reuseMinHits` (2), `reuseBudgetChars` (400000).
 
 ## Limitations
 
