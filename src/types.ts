@@ -97,8 +97,14 @@ export interface CompactOptions {
   goal?: string;
   /** Minimum keep probability for a call or result to stay. Default 0.5. */
   keepThreshold?: number;
-  /** Newest messages never touched (the first message is always kept). Default 6. */
+  /** Newest messages never touched (the first message is always kept). Default 40. */
   preserveRecentMessages?: number;
+  /** Keep results whose identifiers the later conversation keeps mentioning. Default true. */
+  reuseKeep?: boolean;
+  /** Distinct identifiers that must reappear for a result to count as reused. Default 2. */
+  reuseMinHits?: number;
+  /** Most characters of extra results the reuse step may keep. Default 400000. */
+  reuseBudgetChars?: number;
   /** Estimated token ceiling for the state. Default 25000. */
   maxStateTokens?: number;
   /** Estimated token ceiling for state plus one batch of questions. Default 30000. */
@@ -111,6 +117,9 @@ export interface ResolvedCompactOptions {
   goal: string;
   keepThreshold: number;
   preserveRecentMessages: number;
+  reuseKeep: boolean;
+  reuseMinHits: number;
+  reuseBudgetChars: number;
   maxStateTokens: number;
   maxRequestTokens: number;
   truncateHeadChars: number;

@@ -1,5 +1,6 @@
 import { noulAnswer } from './request.js';
 import { compactChunked } from './chunk.js';
+import { reusedCallIds } from './reuse.js';
 import { collectToolCalls, estimateTokens, fitState } from './state.js';
 import type {
   CallAnswer,
@@ -18,7 +19,10 @@ import type {
 export const DEFAULT_OPTIONS: ResolvedCompactOptions = {
   goal: '',
   keepThreshold: 0.5,
-  preserveRecentMessages: 6,
+  preserveRecentMessages: 40,
+  reuseKeep: true,
+  reuseMinHits: 2,
+  reuseBudgetChars: 400_000,
   maxStateTokens: 25_000,
   maxRequestTokens: 30_000,
   truncateHeadChars: 300,
@@ -54,6 +58,9 @@ export function resolveOptions(options: CompactOptions = {}): ResolvedCompactOpt
         finite(options.preserveRecentMessages, DEFAULT_OPTIONS.preserveRecentMessages),
       ),
     ),
+    reuseKeep: options.reuseKeep ?? DEFAULT_OPTIONS.reuseKeep,
+    reuseMinHits: Math.max(1, Math.floor(finite(options.reuseMinHits, DEFAULT_OPTIONS.reuseMinHits))),
+    reuseBudgetChars: Math.max(0, finite(options.reuseBudgetChars, DEFAULT_OPTIONS.reuseBudgetChars)),
     maxStateTokens: Math.max(1, finite(options.maxStateTokens, DEFAULT_OPTIONS.maxStateTokens)),
     maxRequestTokens: Math.max(
       1,
@@ -362,6 +369,17 @@ export async function compact(
       fitted = { tokens: chunked.stateTokens, stage: chunked.stateStage };
       requestCount = chunked.requests;
       for (const [id, answer] of chunked.answers) answers.set(id, answer);
+    }
+  }
+
+  // Reuse override: results whose identifiers the conversation keeps referring to stay,
+  // whatever Decide scored them. Plain text matching, no extra model call.
+  if (resolved.reuseKeep) {
+    for (const id of reusedCallIds(messages, calls, answers, resolved.keepThreshold, {
+      minHits: resolved.reuseMinHits,
+      budgetChars: resolved.reuseBudgetChars,
+    })) {
+      answers.set(id, { keepCall: 1, keepResult: 1 });
     }
   }
 

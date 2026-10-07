@@ -119,11 +119,14 @@ stage was needed, and the number of requests.
 
 Experimental. What was measured, so you can judge it:
 
-- Real use: on one long coding-agent session (nine compactions, 78k-310k tokens kept) the session carried on without visible loss of context, with 5-15x more of the conversation kept word for word than the built-in summary.
-- A replay test on real session slices (checking whether file paths and ids used later survive) did not beat naive baselines such as keeping the newest messages. On long histories Decide drops most tool calls and results, so detail that lived only in old tool output is gone.
+- Replay test: take a real coding-agent session, compact its first 80%, then check what fraction of the file paths, error names and ids used in the last 20% are still present (3 slices of one agent's sessions, so a small sample). Plain Decide dropped almost every tool call and scored 24-67% recall, below keeping the newest text of the same size.
+- Two changes fixed most of that. (1) Newest 40 messages are protected instead of 6 (a recency floor, as in Unreal Agent's compaction). (2) A text-matching step keeps tool results whose paths, ids or error names the later conversation keeps mentioning, up to a size cap. With both, recall rose to 81-96% at 39-52% smaller history. That is on par with keeping the newest text of the same size (84-98%), not clearly better, and it shrinks the history much less than the old 70-90%.
+- An LLM summary of the older part plus the last 40 messages kept 23-44% recall at 95-97% smaller. Different trade-off: much smaller, much more lost.
+- The reuse step looks at the same kind of identifiers the test scores, so the test favours it. Treat the numbers as indicative.
+- In real use on one long session (nine compactions), the agent carried on without visible loss of context.
 - Large histories are decided in windows of about 18k tokens; free-tier rate limits are retried with backoff.
 - In headless/SDK hosts (e.g. the Claude desktop app) the hook cannot start a compaction itself, so it queues `/compact` once context passes the threshold. Each step is written to `~/.claude/fast-decide-trace.log`.
-- The per-call decision table is no longer printed by default; set `FAST_DECIDE_VERBOSE=1` to see it.
+- The per-call decision table is not printed by default; set `FAST_DECIDE_VERBOSE=1` to see it. Options: `preserveRecentMessages` (default 40), `reuseKeep` (default true), `reuseMinHits` (2), `reuseBudgetChars` (400000).
 
 ## Limitations
 
