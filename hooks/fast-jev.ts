@@ -20,7 +20,7 @@ import type {
 } from '../src/types.js';
 
 const HOOK_DEFAULTS = {
-  compactAtPercent: 67,
+  compactAtPercent: 60,
   minReductionRatio: 0.25,
   // OpenRouter default: Inception's Mercury Decide (free, 32k ctx, same Decisions API).
   // Override with the `model` plugin option or the FAST_JEV_MODEL env var.
@@ -72,10 +72,10 @@ const OPENROUTER_DECISIONS_URL = 'https://openrouter.ai/api/alpha/decisions';
 // `mode: economy` trades fidelity for a smaller, cheaper context: compact at 20% of the window,
 // keep the newest ~20k tokens whole, and trim to about 40k tokens. Explicit options still win.
 const ECONOMY_PRESET = {
-  compactAtPercent: 67,
+  compactAtPercent: 60,
   preserveRecentMessages: 10,
   preserveRecentPercent: 2,
-  targetPercent: 4,
+  targetPercent: 5,
 } as const;
 
 export function resolveHookConfig(options: PluginOptions): HookConfig {

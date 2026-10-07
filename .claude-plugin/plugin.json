@@ -25,8 +25,8 @@
     "compactAtPercent": {
       "type": "number",
       "title": "Compaction percentage",
-      "description": "Percent of the model's context window at which compaction starts (default 67).",
-      "default": 67
+      "description": "Percent of the model's context window at which compaction starts (default 60, which is 600k tokens on a 1M window).",
+      "default": 60
     },
     "minReductionRatio": {
       "type": "number",
@@ -61,7 +61,7 @@
     "mode": {
       "type": "string",
       "title": "Mode",
-      "description": "economy (default): compact at the trigger, keep the newest 2% of the window whole and trim to about 4%, so a long session costs less per turn. fidelity: keep far more of the history (costs more per turn).",
+      "description": "economy (default): compact at the trigger, keep the newest 2% of the window whole and trim to about 5%, so a long session costs about 26-30% less per turn than the host default. fidelity: keep far more of the history (about the same cost as the default or more).",
       "default": "economy",
       "options": [
         "economy",
